@@ -4,28 +4,36 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Rate limiting state
+// Rate limiting state — sliding window
 const clients = new Map();
 
 function rateLimit(windowMs, max) {
   return (req, res, next) => {
     const key = req.ip;
     const now = Date.now();
-    const record = clients.get(key) || { count: 0, resetAt: now + windowMs };
+    let record = clients.get(key);
 
-    if (now > record.resetAt) {
-      record.count = 0;
-      record.resetAt = now + windowMs;
+    if (!record) {
+      record = { timestamps: [] };
+      clients.set(key, record);
     }
 
-    record.count++;
-    clients.set(key, record);
+    // Sliding window: drop timestamps outside the window
+    record.timestamps = record.timestamps.filter(t => now - t < windowMs);
+    record.timestamps.push(now);
 
-    if (record.count > max) {
-      return res.status(429).json({ error: 'Rate limit exceeded' });
+    const remaining = Math.max(0, max - record.timestamps.length);
+
+    if (record.timestamps.length > max) {
+      res.setHeader('X-RateLimit-Remaining', 0);
+      res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
+      return res.status(429).json({
+        error: 'Rate limit exceeded',
+        retryAfter: Math.ceil(windowMs / 1000),
+      });
     }
 
-    res.setHeader('X-RateLimit-Remaining', max - record.count);
+    res.setHeader('X-RateLimit-Remaining', remaining);
     next();
   };
 }
@@ -44,7 +52,7 @@ app.use('/api',
   createProxyMiddleware({
     target: process.env.UPSTREAM_URL,
     changeOrigin: true,
-    pathRewrite: { '^/api': '' },
+    pathRewrite: { '^/api': '/v2' },
     onProxyReq: (proxyReq) => {
       proxyReq.setHeader('Authorization', `Bearer ${process.env.API_KEY}`);
     },
