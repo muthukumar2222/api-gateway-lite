@@ -1,8 +1,11 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const { requestLogger } = require('./logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+app.use(requestLogger());
 
 // Rate limiting state
 const clients = new Map();
@@ -44,7 +47,7 @@ app.use('/api',
   createProxyMiddleware({
     target: process.env.UPSTREAM_URL,
     changeOrigin: true,
-    pathRewrite: { '^/api': '' },
+    pathRewrite: { '^/api': '/v2' },
     onProxyReq: (proxyReq) => {
       proxyReq.setHeader('Authorization', `Bearer ${process.env.API_KEY}`);
     },
